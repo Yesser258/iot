@@ -1,7 +1,7 @@
 import mqtt from 'mqtt';
 import https from 'https';
 
-const MQTT_BROKER = 'mqtt://192.168.90.128:1883';
+const MQTT_BROKER = 'mqtt://192.168.1.149:1883';
 const MQTT_TOPIC = 'esp32/sensors';
 
 
