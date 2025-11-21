@@ -2,10 +2,11 @@ import { Activity } from 'lucide-react';
 
 interface SensorDataCardProps {
   rotation: { x: number; y: number; z: number };
+  acceleration: { x: number; y: number; z: number };
   timestamp: string;
 }
 
-export default function SensorDataCard({ rotation, timestamp }: SensorDataCardProps) {
+export default function SensorDataCard({ rotation, acceleration, timestamp }: SensorDataCardProps) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="flex items-center gap-3 mb-4">

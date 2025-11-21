@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Bike, Wifi, WifiOff } from 'lucide-react';
 import HelmetVisualization from './components/HelmetVisualization';
 import LocationCard from './components/LocationCard';
 import SensorDataCard from './components/SensorDataCard';
+import SettingsPanel from './components/SettingsPanel';
+import AccidentAlert from './components/AccidentAlert';
 import { getSimulatedData, type SensorData } from './data/staticData';
-import { getLatestSensorData, subscribeSensorData, type SensorDataRow } from './lib/supabase';
+import { getLatestSensorData, subscribeSensorData, type SensorDataRow, supabase } from './lib/supabase';
+import { AccidentDetectionService } from './lib/accidentDetection';
 
 // This function now converts accelerometer data as well
 function convertToSensorData(row: SensorDataRow): SensorData {
@@ -33,6 +36,10 @@ function App() {
   const [sensorData, setSensorData] = useState<SensorData>(getSimulatedData());
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [activeAccident, setActiveAccident] = useState<{ id: string; dangerPercentage: number } | null>(null);
+
+  const detectionService = useRef(new AccidentDetectionService());
+  const accidentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -45,10 +52,37 @@ function App() {
         setLastUpdate(new Date(latestData.created_at));
       }
 
-      unsubscribe = subscribeSensorData((newData) => {
-        setSensorData(convertToSensorData(newData));
+      unsubscribe = subscribeSensorData(async (newData) => {
+        const converted = convertToSensorData(newData);
+        setSensorData(converted);
         setIsConnected(true);
         setLastUpdate(new Date(newData.created_at));
+
+        detectionService.current.addReading(
+          converted.accelerometer.x,
+          converted.accelerometer.y,
+          converted.accelerometer.z,
+          converted.gyroscope.x,
+          converted.gyroscope.y,
+          converted.gyroscope.z
+        );
+
+        const result = detectionService.current.detectWithHistory();
+
+        if (result.isAccident && !activeAccident) {
+          console.log('Accident detected!', result);
+          await handleAccidentDetected(
+            converted.location.latitude,
+            converted.location.longitude,
+            result.dangerPercentage,
+            newData.acc_x,
+            newData.acc_y,
+            newData.acc_z,
+            newData.gyro_x,
+            newData.gyro_y,
+            newData.gyro_z
+          );
+        }
       });
     };
 
@@ -64,10 +98,149 @@ function App() {
       if (unsubscribe) unsubscribe();
       clearInterval(checkTimeout);
     };
-  }, [lastUpdate]);
+  }, [lastUpdate, activeAccident]);
+
+  const handleAccidentDetected = async (
+    latitude: number,
+    longitude: number,
+    dangerPercentage: number,
+    accX: number,
+    accY: number,
+    accZ: number,
+    gyroX: number,
+    gyroY: number,
+    gyroZ: number
+  ) => {
+    try {
+      const { data: accidentLog, error: logError } = await supabase
+        .from('accident_logs')
+        .insert({
+          latitude,
+          longitude,
+          danger_percentage: dangerPercentage,
+          acc_x: accX,
+          acc_y: accY,
+          acc_z: accZ,
+          gyro_x: gyroX,
+          gyro_y: gyroY,
+          gyro_z: gyroZ,
+          status: 'pending',
+          user_responded: false,
+          emails_sent: false,
+        })
+        .select()
+        .single();
+
+      if (logError || !accidentLog) {
+        console.error('Error logging accident:', logError);
+        return;
+      }
+
+      setActiveAccident({
+        id: accidentLog.id,
+        dangerPercentage,
+      });
+
+      const { data: settings } = await supabase
+        .from('user_settings')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+
+      if (settings?.user_email) {
+        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-accident-alert`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            userEmail: settings.user_email,
+            contact1: settings.emergency_contact_1,
+            contact2: settings.emergency_contact_2,
+            latitude,
+            longitude,
+            dangerPercentage,
+            accidentId: accidentLog.id,
+            emailType: 'user_confirmation',
+          }),
+        });
+      }
+
+      accidentTimeoutRef.current = setTimeout(async () => {
+        await sendEmergencyAlerts(accidentLog.id, settings, latitude, longitude, dangerPercentage);
+      }, 30000);
+    } catch (error) {
+      console.error('Error handling accident:', error);
+    }
+  };
+
+  const sendEmergencyAlerts = async (
+    accidentId: string,
+    settings: any,
+    latitude: number,
+    longitude: number,
+    dangerPercentage: number
+  ) => {
+    if (settings && (settings.emergency_contact_1 || settings.emergency_contact_2)) {
+      await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-accident-alert`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          userEmail: settings.user_email,
+          contact1: settings.emergency_contact_1,
+          contact2: settings.emergency_contact_2,
+          latitude,
+          longitude,
+          dangerPercentage,
+          accidentId,
+          emailType: 'emergency_alert',
+        }),
+      });
+
+      await supabase
+        .from('accident_logs')
+        .update({
+          status: 'confirmed',
+          emails_sent: true,
+        })
+        .eq('id', accidentId);
+    }
+
+    setActiveAccident(null);
+  };
+
+  const handleCancelAccident = async () => {
+    if (activeAccident && accidentTimeoutRef.current) {
+      clearTimeout(accidentTimeoutRef.current);
+      accidentTimeoutRef.current = null;
+
+      await supabase
+        .from('accident_logs')
+        .update({
+          status: 'cancelled',
+          user_responded: true,
+        })
+        .eq('id', activeAccident.id);
+
+      setActiveAccident(null);
+      detectionService.current.reset();
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200">
+      <SettingsPanel />
+      {activeAccident && (
+        <AccidentAlert
+          accidentId={activeAccident.id}
+          dangerPercentage={activeAccident.dangerPercentage}
+          onCancel={handleCancelAccident}
+        />
+      )}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
