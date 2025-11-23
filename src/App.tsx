@@ -3,14 +3,13 @@ import { Bike, Wifi, WifiOff } from 'lucide-react';
 import HelmetVisualization from './components/HelmetVisualization';
 import LocationCard from './components/LocationCard';
 import SensorDataCard from './components/SensorDataCard';
-import SettingsPanel from './components/SettingsPanel';
 import AccidentAlert from './components/AccidentAlert';
 import { getSimulatedData, type SensorData } from './data/staticData';
 import { getLatestSensorData, subscribeSensorData, type SensorDataRow, supabase } from './lib/supabase';
 import { AccidentDetectionService } from './lib/accidentDetection';
 
 // Helper: Calcule les angles d'inclinaison (Pitch/Roll) à partir de la gravité (Accéléromètre)
-// RETOURNE DES DEGRÉS (Essentiel pour que la visualisation 3D fonctionne correctement)
+// RETOURNE DES DEGRÉS (Essentiel pour que la visualisation 3D fonctionne)
 function calculateOrientation(acc: { x: number; y: number; z: number }) {
   const pitchRad = Math.atan2(acc.y, acc.z);
   // Note: On inverse X pour le Roll pour correspondre aux mouvements standards
@@ -25,7 +24,7 @@ function calculateOrientation(acc: { x: number; y: number; z: number }) {
   };
 }
 
-// Helper: Filtre Passe-Bas pour lisser les données (réduit le tremblement des chiffres et du modèle 3D)
+// Helper: Filtre Passe-Bas pour lisser les données (réduit le tremblement)
 function lowPassFilter(current: number, previous: number, alpha: number = 0.1) {
   return previous + alpha * (current - previous);
 }
@@ -48,7 +47,7 @@ function App() {
   const detectionService = useRef(new AccidentDetectionService());
   const accidentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Référence pour le lissage des données (stocke l'état précédent)
+  // Référence pour le lissage des données
   const prevAccel = useRef({ x: 0, y: 0, z: 1 });
 
   // --- VERROU : Empêche l'envoi de multiples messages pour le même accident ---
@@ -60,7 +59,7 @@ function App() {
     const handleNewData = (newData: SensorDataRow) => {
       const raw = convertToSensorData(newData);
       
-      // 1. Logique de lissage (Smoothing)
+      // Logique de lissage
       const smoothAlpha = 0.1; 
       const smoothedAccel = {
         x: lowPassFilter(raw.accelerometer.x, prevAccel.current.x, smoothAlpha),
@@ -69,35 +68,29 @@ function App() {
       };
       prevAccel.current = smoothedAccel;
 
-      // On utilise les données lissées pour l'affichage et la détection d'orientation
       const finalData: SensorData = { ...raw, accelerometer: smoothedAccel };
 
       setSensorData(finalData);
       setIsConnected(true);
       setLastUpdate(new Date(newData.created_at));
 
-      // 2. Logique de détection d'accident (Impact)
+      // Logique de détection
       detectionService.current.addReading(
         finalData.accelerometer.x, finalData.accelerometer.y, finalData.accelerometer.z,
         finalData.gyroscope.x, finalData.gyroscope.y, finalData.gyroscope.z
       );
 
       const result = detectionService.current.detectWithHistory();
-      
-      // 3. Détection de retournement (Upside Down)
-      // Si Z est négatif, le casque est à l'envers.
       const zValue = finalData.accelerometer.z;
       const isUpsideDown = zValue < 0.0; 
 
-      // --- DÉCLENCHEMENT ---
-      // On vérifie le verrou (isTriggered) pour ne pas spammer
+      // --- VÉRIFICATION DU VERROU ---
       if ((result.isAccident || isUpsideDown) && !activeAccident && !isTriggered.current) {
-        console.log('ACCIDENT DÉCLENCHÉ (Impact ou Retournement)');
+        console.log('ACCIDENT DÉCLENCHÉ');
         
-        // Verrouillage immédiat
+        // 1. VERROUILLAGE IMMÉDIAT
         isTriggered.current = true;
 
-        // Si retourné, danger maximal
         const finalDanger = isUpsideDown ? 100 : result.dangerPercentage;
 
         handleAccidentDetected(
@@ -148,7 +141,7 @@ function App() {
 
       const { data: settings } = await supabase.from('user_settings').select('*').limit(1).maybeSingle();
 
-      // --- CORRECTION : Envoi Telegram même si l'email est vide ---
+      // Envoi Telegram même si aucun email n'est configuré (car IDs dans secrets)
       if (settings) {
         await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-accident-alert`, {
           method: 'POST',
@@ -157,7 +150,6 @@ function App() {
             'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
-            // On envoie des valeurs par défaut si les champs sont vides pour éviter les erreurs
             userEmail: settings.user_email || "telegram-user", 
             contact1: settings.emergency_contact_1 || "telegram-group",
             contact2: settings.emergency_contact_2 || "",
@@ -172,12 +164,11 @@ function App() {
         await sendEmergencyAlerts(accidentLog.id, settings, latitude, longitude, dangerPercentage);
       }, 30000);
     } catch (error) {
-      console.error('Erreur gestion accident:', error);
+      console.error('Erreur lors de la gestion de l\'accident:', error);
     }
   };
 
   const sendEmergencyAlerts = async (accidentId: string, settings: any, latitude: number, longitude: number, dangerPercentage: number) => {
-    // --- CORRECTION : Envoi Telegram au groupe même sans email contact ---
     if (settings) {
       await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-accident-alert`, {
         method: 'POST',
@@ -198,7 +189,7 @@ function App() {
     }
     setActiveAccident(null);
     
-    // Déverrouillage du système après envoi
+    // Déverrouillage après l'envoi des alertes
     setTimeout(() => { isTriggered.current = false; }, 5000);
   };
 
@@ -211,14 +202,13 @@ function App() {
       detectionService.current.reset();
 
       console.log("Alerte annulée.");
-      // Délai avant de réarmer le système (5 secondes)
+      // Délai avant de réarmer le système
       setTimeout(() => { isTriggered.current = false; }, 5000);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 relative">
-      <SettingsPanel />
       {activeAccident && (
         <AccidentAlert
           accidentId={activeAccident.id}
@@ -260,14 +250,12 @@ function App() {
           <LocationCard latitude={sensorData.location.latitude} longitude={sensorData.location.longitude} />
           <SensorDataCard
             rotation={sensorData.gyroscope}
-            // On passe les données lissées pour l'affichage
             acceleration={sensorData.accelerometer}
             timestamp={sensorData.timestamp}
           />
           <div className="bg-white rounded-lg shadow-lg p-4 flex flex-col">
             <h2 className="text-xl font-semibold text-gray-800 mb-3">3D Helmet Orientation</h2>
             <div className="flex-1 w-full">
-              {/* IMPORTANT : On passe l'orientation calculée en degrés */}
               <HelmetVisualization rotation={calculateOrientation(sensorData.accelerometer)} />
             </div>
             <div className="mt-3 text-xs text-gray-600 text-center">Use mouse to rotate • Scroll to zoom</div>
