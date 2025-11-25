@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bike, Wifi, WifiOff, AlertOctagon, Zap, History } from 'lucide-react';
+import { Wifi, WifiOff, AlertOctagon, Zap } from 'lucide-react';
 import HelmetVisualization from './components/HelmetVisualization';
 import LocationCard from './components/LocationCard';
 import SensorDataCard from './components/SensorDataCard';
-// import SettingsPanel from './components/SettingsPanel'; // Supprimé
 import AccidentAlert from './components/AccidentAlert';
-import PathVisualization from './components/PathVisualization'; // <-- NOUVEL IMPORT
 import { getSimulatedData, type SensorData } from './data/staticData';
-import { getLatestSensorData, subscribeSensorData, type SensorDataRow, supabase, getSensorHistory } from './lib/supabase';
+import { getLatestSensorData, subscribeSensorData, type SensorDataRow, supabase } from './lib/supabase';
 import { AccidentDetectionService } from './lib/accidentDetection';
 
 // Helper: Calcule les angles d'inclinaison (Pitch/Roll) à partir de la gravité (Accéléromètre)
@@ -37,11 +35,6 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [activeAccident, setActiveAccident] = useState<{ id: string; dangerPercentage: number } | null>(null);
-
-  // --- ÉTATS POUR L'HISTORIQUE ---
-  const [showHistory, setShowHistory] = useState(false);
-  const [historyData, setHistoryData] = useState<any[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const detectionService = useRef(new AccidentDetectionService());
   const accidentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -117,17 +110,6 @@ function App() {
     };
   }, [lastUpdate, activeAccident]);
 
-  // --- FONCTION: Charger/Afficher l'historique ---
-  const toggleHistory = async () => {
-    if (!showHistory) {
-      setLoadingHistory(true);
-      // Récupère les 7 derniers jours
-      const data = await getSensorHistory(7); 
-      setHistoryData(data || []);
-      setLoadingHistory(false);
-    }
-    setShowHistory(!showHistory);
-  };
 
   const handleAccidentDetected = async (
     latitude: number, longitude: number, dangerPercentage: number,
@@ -214,14 +196,6 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-200 relative">
-      {/* MODALE HISTORIQUE */}
-      {showHistory && (
-        <PathVisualization 
-          data={historyData} 
-          onClose={() => setShowHistory(false)} 
-        />
-      )}
-
       {activeAccident && (
         <AccidentAlert
           accidentId={activeAccident.id}
@@ -243,17 +217,6 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {/* BOUTON HISTORIQUE */}
-              <button 
-                onClick={toggleHistory}
-                disabled={loadingHistory}
-                className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center gap-2"
-                title="Voir l'historique (7 jours)"
-              >
-                <History className={`w-5 h-5 ${loadingHistory ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">{loadingHistory ? 'Chargement...' : 'Historique'}</span>
-              </button>
-
               {isConnected ? (
                 <>
                   <Wifi className="w-5 h-5 text-green-600" />

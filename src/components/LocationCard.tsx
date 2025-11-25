@@ -1,5 +1,7 @@
-import { MapPin, ExternalLink } from 'lucide-react';
+import { MapPin, ExternalLink, History } from 'lucide-react';
 import { useState } from 'react';
+import PathVisualization from './PathVisualization';
+import { getSensorHistory } from '../lib/supabase';
 
 interface LocationCardProps {
     latitude: number;
@@ -8,17 +10,49 @@ interface LocationCardProps {
 
 export default function LocationCard({ latitude, longitude }: LocationCardProps) {
     const [showMap, setShowMap] = useState(true);
+    const [showHistory, setShowHistory] = useState(false);
+    const [historyData, setHistoryData] = useState<any[]>([]);
+    const [loadingHistory, setLoadingHistory] = useState(false);
 
     const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - 0.01},${latitude - 0.01},${longitude + 0.01},${latitude + 0.01}&layer=mapnik&marker=${latitude},${longitude}`;
 
+    const toggleHistory = async () => {
+        if (!showHistory) {
+            setLoadingHistory(true);
+            const data = await getSensorHistory(7);
+            setHistoryData(data || []);
+            setLoadingHistory(false);
+        }
+        setShowHistory(!showHistory);
+    };
+
     return (
-        <div className="bg-white rounded-lg shadow-lg p-6">
-            <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-blue-100 rounded-lg">
-                    <MapPin className="w-6 h-6 text-blue-600" />
+        <>
+            {showHistory && (
+                <PathVisualization
+                    data={historyData}
+                    onClose={() => setShowHistory(false)}
+                />
+            )}
+
+            <div className="bg-white rounded-lg shadow-lg p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="p-3 bg-blue-100 rounded-lg">
+                            <MapPin className="w-6 h-6 text-blue-600" />
+                        </div>
+                        <h2 className="text-xl font-semibold text-gray-800">GPS Location</h2>
+                    </div>
+                    <button
+                        onClick={toggleHistory}
+                        disabled={loadingHistory}
+                        className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium disabled:opacity-50"
+                        title="View 7-day history"
+                    >
+                        <History className={`w-4 h-4 ${loadingHistory ? 'animate-spin' : ''}`} />
+                        <span className="hidden sm:inline">History</span>
+                    </button>
                 </div>
-                <h2 className="text-xl font-semibold text-gray-800">GPS Location</h2>
-            </div>
 
             {showMap ? (
                 <div className="space-y-3">
@@ -86,5 +120,6 @@ export default function LocationCard({ latitude, longitude }: LocationCardProps)
                 </a>
             </div>
         </div>
+        </>
     );
 }
